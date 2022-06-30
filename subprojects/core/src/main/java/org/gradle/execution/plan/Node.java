@@ -142,10 +142,7 @@ public abstract class Node implements Comparable<Node> {
         NodeGroup newGroup = group;
         for (Node predecessor : getDependencyPredecessors()) {
             if (predecessor.getGroup() instanceof HasFinalizers) {
-                HasFinalizers newGroupWithFinalizers = maybeInheritGroupAsFinalizerDependency((HasFinalizers) predecessor.getGroup(), newGroup);
-                // The first finalizer group to reach here would "own" this node if it isn't part of some ordinal group already.
-                newGroupWithFinalizers.maybeAddToOwnedMembers(this);
-                newGroup = newGroupWithFinalizers;
+                newGroup = maybeInheritGroupAsFinalizerDependency((HasFinalizers) predecessor.getGroup(), newGroup);
             }
         }
         if (newGroup != group) {

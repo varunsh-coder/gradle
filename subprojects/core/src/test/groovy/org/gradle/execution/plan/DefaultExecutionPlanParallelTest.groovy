@@ -615,6 +615,26 @@ class DefaultExecutionPlanParallelTest extends AbstractExecutionPlanSpec {
         assertAllWorkComplete()
     }
 
+    def "finalizer can have overlapping finalized nodes and dependencies"() {
+        given:
+        TaskInternal finalizer = createTask("finalizer")
+        TaskInternal finalizerDepA = task("finalizerDepA", type: Async, finalizedBy: [finalizer])
+        TaskInternal finalizerDepB = task("finalizerDepB", type: Async)
+        relationships(finalizer, dependsOn: [finalizerDepA, finalizerDepB])
+        TaskInternal entryPoint = task("entryPoint", type: Async, finalizedBy: [finalizer])
+
+        when:
+        addToGraphAndPopulate(entryPoint)
+
+        then:
+        executionPlan.tasks as List == [entryPoint, finalizerDepA, finalizerDepB, finalizer]
+        assertTaskReady(entryPoint)
+        assertTaskReady(finalizerDepA)
+        assertTaskReady(finalizerDepB)
+        assertTaskReadyAndNoMoreToStart(finalizer)
+        assertAllWorkComplete()
+    }
+
     @Issue("https://github.com/gradle/gradle/issues/21000")
     def "dependency of finalizers finalizing other finalizer do not start before the latter"() {
         given:
@@ -639,7 +659,7 @@ class DefaultExecutionPlanParallelTest extends AbstractExecutionPlanSpec {
     }
 
     @Issue("https://github.com/gradle/gradle/issues/21000")
-    def "dependency of finalizers finalizing dependency of other finalizer do not start before this dependecy"() {
+    def "dependency of finalizers finalizing dependency of other finalizer do not start before this dependency"() {
         given:
         TaskInternal finalizerA = createTask("finalizerA", project, Async)
         TaskInternal finalizerB = createTask("finalizerB", project, Async)
@@ -663,6 +683,37 @@ class DefaultExecutionPlanParallelTest extends AbstractExecutionPlanSpec {
         assertAllWorkComplete()
     }
 
+    def "dependency of finalizers in chain of finalizers are deferred"() {
+        given:
+        TaskInternal finalizerA = createTask("finalizerA", project, Async)
+        TaskInternal finalizerB = createTask("finalizerB", project, Async)
+        TaskInternal finalizerC = createTask("finalizerC", project, Async)
+        TaskInternal finalizerD = createTask("finalizerD", project, Async)
+        TaskInternal finalizerDepA = task("finalizerDepA", type: Async, finalizedBy: [finalizerA, finalizerB])
+        TaskInternal finalizerDepB = task("finalizerDepB", type: Async, finalizedBy: [finalizerB, finalizerC])
+        TaskInternal finalizerDepC = task("finalizerDepC", type: Async, finalizedBy: [finalizerC, finalizerD])
+        TaskInternal finalizerDepD = task("finalizerDepD", type: Async, finalizedBy: [finalizerD])
+        relationships(finalizerA, dependsOn: [finalizerDepA])
+        relationships(finalizerB, dependsOn: [finalizerDepA, finalizerDepB])
+        relationships(finalizerC, dependsOn: [finalizerDepB, finalizerDepC])
+        relationships(finalizerD, dependsOn: [finalizerDepC, finalizerDepD])
+        TaskInternal entryPoint = task("entryPoint", type: Async, finalizedBy: [finalizerA])
+
+        when:
+        addToGraphAndPopulate(entryPoint)
+
+        then:
+        // TODO - finalizers are incorrectly ordered
+        executionPlan.tasks as List == [entryPoint, finalizerDepA, finalizerDepB, finalizerDepC, finalizerDepD, finalizerD, finalizerC, finalizerB, finalizerA]
+        assertTaskReady(entryPoint)
+        assertTaskReady(finalizerDepA)
+        assertTasksReady(finalizerDepB, finalizerA)
+        assertTasksReady(finalizerDepC, finalizerB)
+        assertTasksReady(finalizerDepD, finalizerC)
+        assertTaskReadyAndNoMoreToStart(finalizerD)
+        assertAllWorkComplete()
+    }
+
     @Issue("https://github.com/gradle/gradle/issues/21000")
     def "finalizer dependencies reachable from entry point and finalized by the finalizer can run in parallel"() {
         TaskInternal finalizer = createTask("finalizer", project, Async)
@@ -678,6 +729,28 @@ class DefaultExecutionPlanParallelTest extends AbstractExecutionPlanSpec {
         executionPlan.tasks as List == [finalizerDepA, finalizerDepB, finalizer, entryPoint]
         assertTasksReady(finalizerDepA, finalizerDepB)
         assertTasksReadyAndNoMoreToStart(finalizer, entryPoint)
+        assertAllWorkComplete()
+    }
+
+    @Issue("https://github.com/gradle/gradle/issues/21125")
+    def "multiple finalizers can depend on a task that they all finalize"() {
+        TaskInternal finalizerA = createTask("finalizerA", project, Async)
+        TaskInternal finalizerB = createTask("finalizerB", project, Async)
+        TaskInternal finalizerDepDep = task("finalizerDepDep", type: Async, finalizedBy: [finalizerA, finalizerB])
+        TaskInternal finalizerDep = task("finalizerDep", type: Async, dependsOn: [finalizerDepDep])
+        relationships(finalizerA, dependsOn: [finalizerDep])
+        relationships(finalizerB, dependsOn: [finalizerDep])
+        TaskInternal entryPoint = task("entryPoint", type: Async, finalizedBy: [finalizerA, finalizerB])
+
+        when:
+        addToGraphAndPopulate(entryPoint)
+
+        then:
+        executionPlan.tasks as List == [entryPoint, finalizerDepDep, finalizerDep, finalizerB, finalizerA]
+        assertTaskReady(entryPoint)
+        assertTaskReady(finalizerDepDep)
+        assertTaskReady(finalizerDep)
+        assertTasksReadyAndNoMoreToStart(finalizerB, finalizerA)
         assertAllWorkComplete()
     }
 
